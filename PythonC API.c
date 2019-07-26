@@ -1,12 +1,55 @@
+/*------------------------------------------------------------------------------*
+ * File Name:				 													*
+ * Creation: 																	*
+ * Purpose: OriginC Source C file												*
+ * Copyright (c) ABCD Corp.	2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010		*
+ * All Rights Reserved															*
+ * 																				*
+ * Modification Log:															*
+ *------------------------------------------------------------------------------*/
+
+
+#include "stdafx.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "C:\Users\Ben\AppData\Local\Programs\Python\Python38\include\Python.h"
+
+
+char* GetDirectoryFromFullPath(const char fp[]);
+char* StrReplace(char* orig, const char* rep, const char* with);
+PyObject* _RunPythonFunction(PyObject* pModule, char* py_fun_name, PyObject* pyInput[], int num_args, int error_code);
+PyObject* __RunPythonFunction(PyObject* pModule, PyObject* pFunc, PyObject* pyInput[], int num_args, int error_code);
+
 /**************************************************************************************************
-A super high level C API for the PythonC Python interpreter. This library is meant to simplify 
-the embedding of PythonC into C or C++ applications by wrapping the most commonly used functions
-from its API included in "python.h"
-
-Auther: Ben Stadnick
+	Error handling
 **************************************************************************************************/
+enum {
+	PYTHON_C_CANNOT_CONVERT_ARGUMENT_TO_PY, // Cannot convert argument
+	PYTHON_C_PY_CALL_FALLIED, // Call failed
+	PYTHON_C_CANNOT_FIND_PY_FUNCTION, // Cannot find function
+	PYTHON_C_PY_MODULE_NOT_LOADED // Module not loaded
+};
 
-#include "python.h"
+void Python_C_PrintErrorCodeText(int error_code)
+{
+	switch( error_code ) {
+	case PYTHON_C_CANNOT_CONVERT_ARGUMENT_TO_PY:
+		printf("Cannot convert argument to Python object\n");
+		break;
+	case PYTHON_C_PY_CALL_FALLIED:
+		printf("Call to Python function failed\n");
+		break;
+	case PYTHON_C_CANNOT_FIND_PY_FUNCTION:
+		printf("Cannot find Python function\n");
+		break;
+	case PYTHON_C_PY_MODULE_NOT_LOADED:
+		printf("Python module not loaded\n");
+	}
+}
+
 
 /**************************************************************************************************
 	Type conversion of C primitives & arrays to Python
@@ -18,7 +61,7 @@ Auther: Ben Stadnick
 **************************************************************************************************/
 #define TO_PYTHON_LIST(TYPE, CONVERT_FUN) 							\
 static PyObject* ToPyType(TYPE &x) { return CONVERT_FUN(x); }		\
-static PyObject* ToPyType(TYPE *arr, size_t nSize) {				\
+static PyObject* ToPyType(TYPE *arr, Py_ssize_t nSize) {				\
 	PyObject *pyList;												\
 	pyList = PyList_New(nSize);										\
 	for(Py_ssize_t ii = 0; ii < nSize; ii++) {						\
@@ -59,7 +102,7 @@ static PyObject *ToPyType(char *arr[], int nSize) {
 	 - Python float must be converted to double or float, Python 'long' must be converted to an 
 		integer type and Python string must be converted to char[]
 **************************************************************************************************/
-#define FROM_PYTHON_TYPE(TYPE, CONVERT_FUN) 							\	
+#define FROM_PYTHON_TYPE(TYPE, CONVERT_FUN) 							\
 static bool FromPyType(PyObject *pyObj, TYPE& x) {						\
 	x = CONVERT_FUN(pyObj);												\
 	/* if pyObj cannot be converted, returns '-1' */					\
@@ -68,57 +111,55 @@ static bool FromPyType(PyObject *pyObj, TYPE& x) {						\
 	}																	\
 	return true;														\
 }																		\
-static bool FromPyType(PyObject *pyList, TYPE* x, Py_ssize_t nSize) {	\	
-	for(Py_ssize_t ii = 0; ii < nSize; ii++) {							\	
+static bool FromPyType(PyObject *pyList, TYPE* x, Py_ssize_t nSize) {	\
+	for(Py_ssize_t ii = 0; ii < nSize; ii++) {							\
 		*x = CONVERT_FUN(PyList_GetItem(pyList, ii));					\
 		if(*x == (TYPE)-1 && !PyErr_Occurred()) {						\
 			return false;												\
 		}																\
-		*x++;															\
-	}																	\	
+		++x;															\
+	}																	\
 	return true; 														\
 }
 
 FROM_PYTHON_TYPE(int, _PyLong_AsInt) /* '_PyLong_AsInt()' is not in online documentation, refer to python include file "longobject.h" for more info */
 FROM_PYTHON_TYPE(unsigned int, PyLong_AsSize_t) 
-#ifdef _OWIN64
 //FROM_PYTHON_TYPE(Py_ssize_t, PyLong_AsSize_t) 
-#endif
-FROM_PYTHON_TYPE(short, PyLong_AsLong)
-FROM_PYTHON_TYPE(unsigned short, PyLong_AsUnsignedLong)
-//FROM_PYTHON_TYPE(long, PyLong_AsLong)
-//FROM_PYTHON_TYPE(unsigned long, PyLong_AsUnsignedLong)
+//FROM_PYTHON_TYPE(short, PyLong_AsLong)
+//FROM_PYTHON_TYPE(unsigned short, PyLong_AsUnsignedLong)
+FROM_PYTHON_TYPE(long, PyLong_AsLong)
+FROM_PYTHON_TYPE(unsigned long, PyLong_AsUnsignedLong)
 FROM_PYTHON_TYPE(double, PyFloat_AsDouble)
-FROM_PYTHON_TYPE(float, PyFloat_AsDouble)
+//FROM_PYTHON_TYPE(float, PyFloat_AsDouble)
 
 // char type requires different error checking
-static bool FromPyType(PyObject *pyObj, char& *x) {
+static bool FromPyType(PyObject *pyObj, const char *x) {
 	x = PyUnicode_AsUTF8(pyObj);
 	return x != NULL;
 }
-static bool FromPyType(PyObject *pyList, char& *x[], Py_ssize_t nSize) {
+static bool FromPyType(PyObject *pyList, const char *x[], Py_ssize_t nSize) {
 	for(Py_ssize_t ii = 0; ii < nSize; ii++) {
 		*x = PyUnicode_AsUTF8(PyList_GetItem(pyList, ii));
 		if(*x == NULL) {
 			return false;									
 		}
-		*x++;
+		++x;
 	}
 	return true;
 }
 
 // use the following to get the length, 'len', of char array(s) as well
-static bool CharFromPyTypeAndSize(PyObject *pyObj, char& *x, Py_ssize_t *len) {
+static bool CharFromPyTypeAndSize(PyObject *pyObj, const char *x, Py_ssize_t *len) {
 	x = PyUnicode_AsUTF8AndSize(pyObj, len);
 	return x != NULL;
 }
-static bool CharFromPyTypeAndSize(PyObject *pyList, char& *x[], Py_ssize_t *len[], Py_ssize_t nSize) {
+static bool CharFromPyTypeAndSize(PyObject *pyList, const char *x[], Py_ssize_t *len[], Py_ssize_t nSize) {
 	for(Py_ssize_t ii = 0; ii < nSize; ii++) {
 		*x = PyUnicode_AsUTF8AndSize(PyList_GetItem(pyList, ii), len[ii]);
 		if(*x == NULL) {
 			return false;									
 		}
-		*x++;
+		++x;
 	}
 	return true;
 }
@@ -150,15 +191,29 @@ bool PyClose()
 // this is usefull if you want your py files to travel with the code/exe rather than the default Python directory
 void AddDirectoryToModuleImport(char* dir)
 {
-	char *dir_ex = StrReplace(dir, "\\", "\\\\");
+	size_t pyCode_len;
+	char* dir_ex;
+	char* pyCode;
+	const char* py_start = "import sys\nsys.path.insert(0, '"; // length = 32
+	const char* py_end = "')"; // length = 2
 	
+	if (!dir)
+		return;
+	
+	dir_ex = StrReplace(dir, "\\", "\\\\"); // '\' will escape in Python as well
+	
+	pyCode_len = strlen(dir_ex) + strlen(py_start) + strlen(py_end) +1;
+	pyCode = (char*)malloc(pyCode_len );
+	if (!pyCode || pyCode_len < 34) {
+		return;
+	}
+
 	/* prepare Python code to add dir to sys.path */
-	size_t nSize = strlen(dir_ex) + 33;
-	char *pyCode = (char*)malloc( nSize );
-	strcpy(pyCode, "import sys\nsys.path.insert(0, '"); // length += 31
+	pyCode = strcpy(pyCode, py_start);
 	strcat(pyCode, dir_ex);
-	strcat(pyCode, "')"); // length += 2
+	strcat(pyCode, py_end);
 	
+
 	PyRun_SimpleString(pyCode);
 	
 	free(pyCode);
@@ -166,9 +221,11 @@ void AddDirectoryToModuleImport(char* dir)
 	
 	/* dev note, it would be good to add a check that dir has been added */
 }
+
 void AddWorkingDirectoryToModuleImport()
 {
-	char* dir = GetDirectoryFromFullPath(__FILE__);
+	char fileName[] = __FILE__;
+	char* dir = GetDirectoryFromFullPath(fileName);
 	AddDirectoryToModuleImport(dir);
 	free(dir);
 }
@@ -177,10 +234,11 @@ void AddWorkingDirectoryToModuleImport()
 // returns a pointer to the module which must be decremented when finished, returns NULL on failure
 PyObject* ImportPyModule(char* module_name)
 {
-	PyObject *pName, *pModule;
+	PyObject *pModule;
 	
 	pModule = PyImport_ImportModule(module_name);
 	
+	//PyObject *pName
 	//pName = PyUnicode_DecodeFSDefault(module_name);
 	//pModule = PyImport_Import(pName);
 	//Py_DecRef(pName);
@@ -207,38 +265,38 @@ PyObject* GetPyFunction(PyObject* pModule, char* py_fun_name)
 }
 
 // loads module, gets function, calls it and returns result
-PyObject* RunPythonFunction(char *module_name, char *py_fun_name, PyObject *pyInput[], int num_args, int &error_code = NULL)
+PyObject* RunPythonFunction(char *module_name, char *py_fun_name, PyObject *pyInput[], int num_args, int error_code)
 {
-	PyObject *pModule, pResult;
+	PyObject *pModule, *pResult;
 	pModule = ImportPyModule(module_name);
-	
+	pResult = _RunPythonFunction(pModule, py_fun_name, pyInput, num_args, error_code);
 	if(pModule)
 	{
-		pResult = RunPythonFunction(pModule, py_fun_name, pyInput, num_args, error_code);
+		
 		Py_DecRef(pModule);
 	}
 	else {
-		printf("Module not loaded");
+		printf("Module not loaded\n");
 	}
 	
 	return pResult;
 }
 // gets function, calls it and returns result
-PyObject* RunPythonFunction(PyObject *pModule, char *py_fun_name, PyObject *pyInput[], int num_args, int &error_code = NULL)
+PyObject* _RunPythonFunction(PyObject *pModule, char *py_fun_name, PyObject *pyInput[], int num_args, int error_code)
 {
-	PyObject *pFunc, *pResult;
+	PyObject *pFunc, *pResult = NULL;
 	
 	pFunc = GetPyFunction(pModule, py_fun_name);
 	
 	if (pFunc) {
-		pResult = RunPythonFunction(pModule, pFunc, pyInput, num_args, error_code);
+		pResult = __RunPythonFunction(pModule, pFunc, pyInput, num_args, error_code);
 		Py_DecRef(pFunc);
 	}
 	
 	return pResult;
 }
 // calls pFunc and returns result
-PyObject* RunPythonFunction(PyObject *pModule, PyObject *pFunc, PyObject *pyInput[], int num_args, int &error_code = NULL)
+PyObject* __RunPythonFunction(PyObject *pModule, PyObject *pFunc, PyObject *pyInput[], int num_args, int error_code)
 {
 	PyObject *pArgs, *pResult;
 	
@@ -267,51 +325,26 @@ PyObject* RunPythonFunction(PyObject *pModule, PyObject *pFunc, PyObject *pyInpu
 
 
 /**************************************************************************************************
-	Error handling
-**************************************************************************************************/
-enum {
-	PYTHON_C_CANNOT_CONVERT_ARGUMENT_TO_PY, // Cannot convert argument
-	PYTHON_C_PY_CALL_FALLIED, // Call failed
-	PYTHON_C_CANNOT_FIND_PY_FUNCTION, // Cannot find function
-	PYTHON_C_PY_MODULE_NOT_LOADED // Module not loaded
-};
-
-void Python_C_PrintErrorCodeText(int error_code)
-{
-	switch( error_code ) {
-	case PYTHON_C_CANNOT_CONVERT_ARGUMENT_TO_PY:
-		printf("Cannot convert argument to Python object\n");
-		break;
-	case PYTHON_C_PY_CALL_FALLIED:
-		printf("Call to Python function failed\n");
-		break;
-	case PYTHON_C_CANNOT_FIND_PY_FUNCTION:
-		printf("Cannot find Python function\n");
-		break;
-	case PYTHON_C_PY_MODULE_NOT_LOADED:
-		printf("Python module not loaded\n");
-	}
-}
-
-
-/**************************************************************************************************
 	General purpose string functions
 **************************************************************************************************/
 // returns the directory given the full path
 // must free return value
-char* GetDirectoryFromFullPath(const char* fp) 
+char* GetDirectoryFromFullPath(const char fp[]) 
 {
-	char *dir_end = strrchr(fp, '\\');
-	size_t dir_len = strlen(fp) - strlen(dir_end) +1;
+	const char *dir_end = strrchr(fp, '\\');
+	size_t dir_len = strlen(fp) - strlen(dir_end);
 	char *dir = (char*)malloc(dir_len+1);
-	char *ret = strncpy(dir, fp, dir_len);
+	if (!dir) {
+		return NULL;
+	}
+	strncpy(dir, fp, dir_len);
 	
-	return ret;
+	return dir;
 }
 
 // replace all instances of 'rep' with 'with'
 // must free return value
-char* StrReplace(char *orig, char *rep, char *with) 
+char* StrReplace(char *orig, const char *rep, const char *with)
 {
 	char *result; // the return string
 	char *ins;    // the next insert point
@@ -321,14 +354,18 @@ char* StrReplace(char *orig, char *rep, char *with)
 	int len_front; // distance between rep and end of last rep
 	int count;    // number of replacements
 	
-	// sanity checks and initialization
-	if (!orig || !rep)
+	if (!orig || !rep) {
 		return NULL;
+	}
+
 	len_rep = strlen(rep);
-	if (len_rep == 0)
+	if (len_rep == 0) {
 		return NULL; // empty rep causes infinite loop during count
-	if (!with)
-		with = "";
+	}
+
+	if (!with) {
+		with = char(0); // replace with nothing, essentially removes all instances of rep
+	}
 	len_with = strlen(with);
 	
 	// count the number of replacements needed
@@ -337,7 +374,7 @@ char* StrReplace(char *orig, char *rep, char *with)
 		ins = tmp + len_rep;
 	}
 	
-	tmp = result = (char*)malloc(strlen(orig) + (len_with - len_rep) * count + 1);
+	tmp = result = (char*)malloc( strlen(orig) + (len_with-len_rep)*count + 1 );
 
 	if (!result)
 		return NULL;
@@ -357,4 +394,5 @@ char* StrReplace(char *orig, char *rep, char *with)
 	strcpy(tmp, orig);
 	return result;
 }
+
 
