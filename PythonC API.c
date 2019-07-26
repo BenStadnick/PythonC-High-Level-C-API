@@ -1,21 +1,15 @@
-/*------------------------------------------------------------------------------*
- * File Name:				 													*
- * Creation: 																	*
- * Purpose: OriginC Source C file												*
- * Copyright (c) ABCD Corp.	2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010		*
- * All Rights Reserved															*
- * 																				*
- * Modification Log:															*
- *------------------------------------------------------------------------------*/
+/**************************************************************************************************
+A super high level C API for the PythonC Python interpreter. This library is meant to simplify 
+the embedding of PythonC into C or C++ applications by wrapping the most commonly used functions
+from its API included in "python.h"
 
-
-#include "stdafx.h"
-
+Auther: Ben Stadnick
+**************************************************************************************************/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "C:\Users\Ben\AppData\Local\Programs\Python\Python38\include\Python.h"
+#include "Python.h"
 
 
 char* GetDirectoryFromFullPath(const char fp[]);
